@@ -9,7 +9,13 @@ import config
 from pipeline.orchestrator import run_pipeline, PipelineCancelled
 from es import client as es_client
 
+import os
+from fastapi import Request
+from starlette.responses import JSONResponse
+
 logger = logging.getLogger("pipeline-service")
+
+_PIPELINE_KEY = os.environ.get("PIPELINE_API_KEY", "")
 
 
 class RunRequest(BaseModel):
@@ -27,6 +33,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def check_api_key(request: Request, call_next):
+    if _PIPELINE_KEY and request.url.path != "/health":
+        if request.headers.get("X-Pipeline-Key") != _PIPELINE_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid or missing X-Pipeline-Key"},
+            )
+    return await call_next(request)
 
 
 @app.post("/run")
