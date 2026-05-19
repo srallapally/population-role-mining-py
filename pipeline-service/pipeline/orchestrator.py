@@ -16,6 +16,9 @@ class PipelineCancelled(Exception):
     pass
 
 
+_MAX_POPULATION_CEILING = 10000
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -45,6 +48,45 @@ def _cleanup_roles(session_id: str) -> None:
         es_client.delete_doc(config.INDEX_ROLES, role["id"])
 
 
+def _validate_session(session: dict) -> dict:
+    """Validate session document read from ES. Defense in depth —
+    Node should have validated at creation, but the pipeline is
+    the last gate before compute runs."""
+
+    if session.get("status") != "running":
+        raise ValueError(
+            f"Session has status '{session.get('status')}', expected 'running'")
+
+    params = session.get("parameters")
+    if not params:
+        raise ValueError("Session has no parameters")
+
+    required_fields = [
+        "filterCriteria", "maxPopulation", "noiseFilterValue",
+        "universalThreshold", "coverageThreshold", "softThreshold",
+        "similarityThreshold", "minGroupSize", "maxRoles",
+        "outlierThreshold", "birthrightCooccurrenceThreshold",
+        "roleType",
+    ]
+    for field in required_fields:
+        if params.get(field) is None:
+            raise ValueError(f"Missing required parameter: {field}")
+
+    if params["maxPopulation"] > _MAX_POPULATION_CEILING:
+        raise ValueError(
+            f"maxPopulation {params['maxPopulation']} "
+            f"exceeds ceiling {_MAX_POPULATION_CEILING}")
+
+    if not params["filterCriteria"]:
+        raise ValueError("filterCriteria is empty")
+
+    if params["roleType"] not in ("birthright", "job_roles"):
+        raise ValueError(
+            f"Invalid roleType: '{params['roleType']}'")
+
+    return params
+
+
 def run_pipeline(session_id: str) -> None:
     """Entry point called in a background thread by POST /sessions/:id/run.
 
@@ -54,15 +96,9 @@ def run_pipeline(session_id: str) -> None:
     PipelineCancelled is raised.
     """
     session = es_client.get(config.INDEX_SESSIONS, session_id)
-    if session is None:
+    if not session:
         raise ValueError(f"Session {session_id} not found")
-    if session["status"] != "running":
-        raise ValueError(
-            f"Session {session_id} has status '{session['status']}', "
-            f"expected 'running'"
-        )
-
-    params = session["parameters"]
+    params = _validate_session(session)
 
     try:
         # Step 1 — Filter population
