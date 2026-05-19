@@ -6,16 +6,21 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 import config
-from pipeline.orchestrator import run_pipeline, PipelineCancelled
+from pipeline.orchestrator import run_pipeline, PipelineCancelled, _now
 from es import client as es_client
 
 import os
+import threading
 from fastapi import Request
 from starlette.responses import JSONResponse
 
 logger = logging.getLogger("pipeline-service")
 
 _PIPELINE_KEY = os.environ.get("PIPELINE_API_KEY", "")
+
+_MAX_CONCURRENT_RUNS = int(os.environ.get("MAX_CONCURRENT_RUNS", 5))
+_running = threading.Semaphore(_MAX_CONCURRENT_RUNS)
+_RUN_TIMEOUT_SECONDS = int(os.environ.get("RUN_TIMEOUT_SECONDS", 300))
 
 
 class RunRequest(BaseModel):
@@ -48,13 +53,56 @@ async def check_api_key(request: Request, call_next):
 
 @app.post("/run")
 def run(req: RunRequest) -> dict:
+    acquired = _running.acquire(blocking=False)
+    if not acquired:
+        return {
+            "status": "failed",
+            "sessionId": req.sessionId,
+            "error": f"Pipeline service at capacity ({_MAX_CONCURRENT_RUNS} concurrent runs)",
+        }
     try:
-        run_pipeline(req.sessionId)
-        return {"status": "complete", "sessionId": req.sessionId}
-    except PipelineCancelled:
-        return {"status": "cancelled", "sessionId": req.sessionId}
-    except Exception as exc:
-        return {"status": "failed", "sessionId": req.sessionId, "error": str(exc)}
+        result = {"status": None, "error": None}
+
+        def _target():
+            try:
+                run_pipeline(req.sessionId)
+                result["status"] = "complete"
+            except PipelineCancelled:
+                result["status"] = "cancelled"
+            except Exception as exc:
+                result["status"] = "failed"
+                result["error"] = str(exc)
+
+        t = threading.Thread(target=_target)
+        t.start()
+        t.join(timeout=_RUN_TIMEOUT_SECONDS)
+
+        if t.is_alive():
+            # Thread is still running — we cannot kill it, but we can
+            # report the timeout. The thread will eventually finish or
+            # be killed when the process exits.
+            timeout_msg = f"Pipeline exceeded {_RUN_TIMEOUT_SECONDS}s timeout"
+            try:
+                es_client.update_doc(config.INDEX_SESSIONS, req.sessionId, {
+                    "status": "failed",
+                    "errorDetail": timeout_msg,
+                    "updatedAt": _now(),
+                    "lastUpdatedBy": "pipeline",
+                })
+            except Exception:
+                pass  # best effort
+            return {
+                "status": "failed",
+                "sessionId": req.sessionId,
+                "error": timeout_msg,
+            }
+
+        response = {"status": result["status"], "sessionId": req.sessionId}
+        if result["error"] is not None:
+            response["error"] = result["error"]
+        return response
+    finally:
+        _running.release()
 
 
 @app.get("/health")
