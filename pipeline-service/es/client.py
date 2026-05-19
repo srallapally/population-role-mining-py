@@ -23,6 +23,14 @@ def index_doc(index: str, doc_id: str, doc: dict) -> None:
     _client.index(index=index, id=doc_id, document=doc)
 
 
+def delete_doc(index: str, doc_id: str) -> None:
+    """Delete a document by _id. Ignore if not found."""
+    try:
+        _client.delete(index=index, id=doc_id)
+    except NotFoundError:
+        pass
+
+
 def update_doc(index: str, doc_id: str, partial: dict) -> None:
     """Partial update via the _update API. partial holds the fields to set."""
     _client.update(index=index, id=doc_id, doc=partial)
