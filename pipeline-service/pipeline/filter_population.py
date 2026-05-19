@@ -1,6 +1,10 @@
 # pipeline-service/pipeline/filter_population.py
+import re
+
 import config
 from es import client as es_client
+
+_FILTER_KEY_PATTERN = re.compile(r'^[a-zA-Z][a-zA-Z0-9_]{0,63}$')
 
 
 def filter_population(
@@ -13,6 +17,10 @@ def filter_population(
     enforces the population cap, then returns the matched user IDs,
     a summary, and each user's entitlement assignments.
     """
+    for key in filter_criteria:
+        if not _FILTER_KEY_PATTERN.match(key):
+            raise ValueError(f"Invalid filter key: '{key}'")
+
     must: list[dict] = []
     for key, value in filter_criteria.items():
         if isinstance(value, list):
