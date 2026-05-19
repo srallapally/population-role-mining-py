@@ -55,7 +55,7 @@ def _ent(eid, display, app_id, app_name, etype, criticality):
 
 SEED_ENTITLEMENTS = [
     # Universal
-    _ent("ent-ad-domain-users", "Domain Users", "app-ad", "Active Directory", "Group", "Low"),
+    _ent("ent-ad-domain-users", "TGH Domain Users", "app-ad", "Active Directory", "Group", "Low"),
     _ent("ent-vpn-allusers", "VPN All Users", "app-vpn", "Pulse Secure VPN", "Group", "Low"),
     _ent("ent-mfa-allusers", "MFA All Users", "app-mfa", "Ping MFA", "Policy", "Low"),
     # Cluster A — Epic
